@@ -7,6 +7,26 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Gothic+A1:wght@400;500;700;900&display=swap" rel="stylesheet">
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+  import { getDatabase, ref, onValue, set, update, remove, get, child }
+    from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+  const firebaseConfig = {
+    apiKey: "AIzaSyC8uAazMQnPMvuPS3Gris1pP5Sa3H9wULo",
+    authDomain: "golf-lesson-8f5ec.firebaseapp.com",
+    databaseURL: "https://golf-lesson-8f5ec-default-rtdb.asia-southeast1.firebasedatabase.app",
+    projectId: "golf-lesson-8f5ec",
+    storageBucket: "golf-lesson-8f5ec.firebasestorage.app",
+    messagingSenderId: "141422912996",
+    appId: "1:141422912996:web:143160ebec3b1d8d87d3f1",
+    measurementId: "G-NM91V2RE6V"
+  };
+  const app = initializeApp(firebaseConfig);
+  const db = getDatabase(app);
+  // 전역으로 노출해 일반 스크립트에서 사용
+  window.FB = { db, ref, onValue, set, update, remove, get, child };
+  window.dispatchEvent(new Event('fb-ready'));
+</script>
 <style>
   :root{
     --bg:#0a0e0c; --bg2:#111815; --card:#161d19;
@@ -162,12 +182,21 @@
     font-size:13px;z-index:200;opacity:0;transition:.3s;pointer-events:none;white-space:nowrap;
     box-shadow:0 10px 30px rgba(31,122,77,.5)}
   .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  /* 영상 미리보기 시트 */
+  .playsheet-inner .ps-cat{font-family:'Bebas Neue';letter-spacing:2px;font-size:14px;
+    color:var(--fair-glow);margin-bottom:8px}
+  .playsheet-inner h3{font-size:21px;font-weight:900}
+  .ps-note{background:var(--card);border:1px solid var(--line);border-radius:14px;
+    padding:15px;font-size:13px;line-height:1.7;color:var(--muted)}
+  .ps-note b{color:var(--text)}
 </style>
 </head>
 <body>
 
 <header>
-  <div class="brand"><span class="mark">GREEN ROOM</span><span class="sub">SHORTS</span></div>
+  <div class="brand"><span class="mark">GREEN ROOM</span><span class="sub">SHORTS</span>
+    <span id="syncDot" title="연결 중" style="width:8px;height:8px;border-radius:50%;background:#c9762a;align-self:center;transition:.3s"></span>
+  </div>
   <button class="addbtn" onclick="openAdd()">＋</button>
 </header>
 
@@ -225,6 +254,24 @@
 </div>
 
 <input type="file" id="fileInput" accept="application/json" style="display:none" onchange="handleImport(event)">
+
+<!-- 영상 미리보기 시트 (뒤로가기로 포탈 복귀) -->
+<div class="overlay" id="playsheet">
+  <div class="sheet playsheet-inner">
+    <div class="grip"></div>
+    <div class="ps-cat" id="psCat"></div>
+    <h3 id="psTitle" style="margin-bottom:18px;line-height:1.35"></h3>
+    <div class="ps-note">
+      ▶ 아래 버튼을 누르면 페이스북에서 영상이 열려요.<br>
+      영상을 보고 <b>휴대폰의 뒤로가기</b>를 누르면 이 화면으로 돌아옵니다.
+    </div>
+    <div class="btnrow" style="margin-top:20px">
+      <button class="btn ghost" onclick="closePlaySheet()">닫기</button>
+      <button class="btn primary" id="psOpen">▶ 영상 보기</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -262,21 +309,84 @@ const CATS = [
   {id:'swing',   name:'스윙 기본기',  ic:'🔄'},
   {id:'etc',     name:'기타/멘탈',    ic:'🧠'},
 ];
-const KEY='greenroom_lessons_v2';
-let lessons = load();
+const LS_KEY='greenroom_lessons_v2';   // 오프라인 캐시(네트워크 끊겨도 화면 유지)
+const DB_PATH='lessons';
+let lessons = loadCache();
 let filter='all', editMode=false;
+let fbReady=false;
 
-function load(){
-  try{
-    const saved=JSON.parse(localStorage.getItem(KEY));
-    if(saved && Array.isArray(saved) && saved.length) return saved;
-  }catch(e){}
-  return SEED_LINKS.map((url,i)=>({
-    id:id(), title:'레슨 '+(i+1)+' — 제목을 입력하세요', cat:'unsorted', url, thumb:''
-  }));
-}
-function save(){ localStorage.setItem(KEY, JSON.stringify(lessons)); render(); }
 function id(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
+
+/* 캐시에서 먼저 그린다(빠른 첫 화면 + 오프라인 대비) */
+function loadCache(){
+  try{
+    const saved=JSON.parse(localStorage.getItem(LS_KEY));
+    if(saved && Array.isArray(saved)) return saved;
+  }catch(e){}
+  return [];
+}
+function cache(){ try{ localStorage.setItem(LS_KEY, JSON.stringify(lessons)); }catch(e){} }
+
+/* ===== Firebase 실시간 연동 ===== */
+function startFirebase(){
+  const {db,ref,onValue,get,child,set}=window.FB;
+  fbReady=true;
+  const lessonsRef=ref(db, DB_PATH);
+
+  // 실시간 구독: 클라우드가 바뀌면 모든 기기에서 자동 갱신
+  onValue(lessonsRef, snap=>{
+    const val=snap.val();
+    if(val && typeof val==='object'){
+      // 객체(key→lesson) → 배열, order 필드로 정렬
+      lessons=Object.keys(val).map(k=>({...val[k], _key:k}))
+        .sort((a,b)=>(a.order??0)-(b.order??0));
+      cache(); render();
+    }else{
+      // DB가 비어있으면 최초 1회 시드 심기
+      seedToCloud();
+    }
+  }, err=>{
+    console.warn('Firebase 읽기 오류, 캐시로 표시:', err);
+    setSyncState('offline'); render();
+  });
+}
+
+/* 최초 1회: 기존 19개 링크를 클라우드에 심기 */
+function seedToCloud(){
+  const {db,ref,set}=window.FB;
+  const obj={};
+  SEED_LINKS.forEach((url,i)=>{
+    const k=id();
+    obj[k]={ id:k, title:'레슨 '+(i+1)+' — 제목을 입력하세요', cat:'unsorted', url, thumb:'', order:i };
+  });
+  set(ref(db, DB_PATH), obj);
+}
+
+/* 한 개 레슨 저장(추가/수정) */
+function fbSave(lesson){
+  if(!fbReady){ toast('연결 준비 중이에요. 잠시 후 다시 시도해주세요'); return; }
+  const {db,ref,set}=window.FB;
+  const key=lesson._key || lesson.id;
+  const data={...lesson}; delete data._key;
+  set(ref(db, DB_PATH+'/'+key), data);
+}
+/* 한 개 레슨 삭제 */
+function fbRemove(lesson){
+  const {db,ref,remove}=window.FB;
+  const key=lesson._key || lesson.id;
+  remove(ref(db, DB_PATH+'/'+key));
+}
+
+function setSyncState(state){
+  const el=document.getElementById('syncDot');
+  if(!el) return;
+  if(state==='online'){ el.style.background='var(--fair-glow)'; el.title='클라우드 동기화됨'; }
+  else{ el.style.background='#c9762a'; el.title='오프라인(캐시 표시 중)'; }
+}
+
+/* Firebase 준비되면 시작 */
+if(window.FB){ startFirebase(); }
+else{ window.addEventListener('fb-ready', startFirebase); }
 function catName(c){const f=CATS.find(x=>x.id===c);return f?f.name:c}
 function catIc(c){const f=CATS.find(x=>x.id===c);return f?f.ic:'⛳'}
 
@@ -298,6 +408,7 @@ function autoGrad(l){
 }
 
 function render(){
+  if(fbReady) setSyncState('online');
   document.getElementById('totalCount').textContent = lessons.length;
   const chips=document.getElementById('chips');
   chips.innerHTML=CATS.map(c=>{
@@ -360,11 +471,37 @@ function cardHTML(l,i){
 function esc(s){return (s||'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
 
 function setFilter(c){filter=c;render()}
+
+/* ===== 영상 열기: 뒤로가기로 페북이 아닌 포탈로 돌아오게 ===== */
 function openLesson(lid){
   const l=lessons.find(x=>x.id===lid); if(!l)return;
   if(editMode){ openEdit(lid); return; }
-  if(l.url) window.open(l.url,'_blank'); else openEdit(lid);
+  if(!l.url){ openEdit(lid); return; }
+  showPlaySheet(l);
 }
+
+function showPlaySheet(l){
+  document.getElementById('psTitle').textContent = l.title;
+  document.getElementById('psCat').textContent = catIc(l.cat)+' '+catName(l.cat);
+  const btn=document.getElementById('psOpen');
+  btn.onclick=()=>{ window.open(l.url,'_blank','noopener'); };
+  const ps=document.getElementById('playsheet');
+  ps.classList.add('on');
+  // 히스토리에 지점 하나 추가 → 페북 앱에서 뒤로가기로 브라우저 복귀 시 이 시트만 닫힘
+  history.pushState({playsheet:true}, '');
+}
+function closePlaySheet(fromPop){
+  const ps=document.getElementById('playsheet');
+  if(!ps.classList.contains('on')) return;
+  ps.classList.remove('on');
+  // 사용자가 X로 닫은 경우엔 우리가 심은 히스토리 지점을 정리
+  if(!fromPop && history.state && history.state.playsheet){ history.back(); }
+}
+// 뒤로가기(back) 이벤트: 페북으로 나가지 않고 시트만 닫기
+window.addEventListener('popstate', ()=>{
+  const ps=document.getElementById('playsheet');
+  if(ps.classList.contains('on')){ closePlaySheet(true); }
+});
 function openAdd(cat){
   document.getElementById('sheetTitle').textContent='레슨 추가';
   document.getElementById('fId').value='';
@@ -387,19 +524,24 @@ function openEdit(lid){
 function saveLesson(){
   const title=document.getElementById('fTitle').value.trim();
   if(!title){toast('제목을 입력해주세요');return}
+  const editId=document.getElementById('fId').value;
+  const existing=editId?lessons.find(x=>x.id===editId):null;
   const obj={
-    id:document.getElementById('fId').value||id(),
+    id: editId || id(),
     title, url:document.getElementById('fUrl').value.trim(),
     cat:document.getElementById('fCat').value,
-    thumb:document.getElementById('fThumb').value.trim()
+    thumb:document.getElementById('fThumb').value.trim(),
+    order: existing ? (existing.order??0) : lessons.length
   };
-  const idx=lessons.findIndex(x=>x.id===obj.id);
-  if(idx>=0) lessons[idx]=obj; else lessons.push(obj);
-  save(); closeSheet(); toast('저장되었습니다 ⛳');
+  if(existing && existing._key) obj._key=existing._key;
+  fbSave(obj);           // 클라우드에 저장 → onValue가 화면 자동 갱신
+  closeSheet(); toast(editId?'수정되었습니다 ⛳':'추가되었습니다 ⛳');
 }
 function delLesson(lid){
   if(!confirm('이 레슨을 삭제할까요?'))return;
-  lessons=lessons.filter(x=>x.id!==lid); save(); toast('삭제되었습니다');
+  const l=lessons.find(x=>x.id===lid);
+  if(l) fbRemove(l);     // 클라우드에서 삭제 → 자동 갱신
+  toast('삭제되었습니다');
 }
 function toggleEdit(){
   editMode=!editMode;
@@ -428,8 +570,15 @@ function handleImport(e){
     try{
       const arr=JSON.parse(r.result);
       if(!Array.isArray(arr))throw 0;
-      lessons=arr.map(l=>({id:l.id||id(),title:l.title||'제목없음',url:l.url||'',cat:l.cat||'unsorted',thumb:l.thumb||''}));
-      save(); toast('복원 완료! '+arr.length+'개 불러옴');
+      if(!confirm(arr.length+'개를 불러와 클라우드에 저장할까요?\n(현재 클라우드 목록을 이 내용으로 덮어씁니다)')) return;
+      const {db,ref,set}=window.FB;
+      const obj={};
+      arr.forEach((l,i)=>{
+        const k=l._key||l.id||id();
+        obj[k]={id:l.id||k,title:l.title||'제목없음',url:l.url||'',cat:l.cat||'unsorted',thumb:l.thumb||'',order:l.order??i};
+      });
+      set(ref(db, DB_PATH), obj);
+      toast('복원 완료! '+arr.length+'개 클라우드 저장');
     }catch(err){toast('파일을 읽을 수 없어요')}
   };
   r.readAsText(file); e.target.value='';
@@ -437,13 +586,14 @@ function handleImport(e){
 function showSheet(){document.getElementById('overlay').classList.add('on')}
 function closeSheet(){document.getElementById('overlay').classList.remove('on')}
 document.getElementById('overlay').addEventListener('click',e=>{if(e.target.id==='overlay')closeSheet()});
+document.getElementById('playsheet').addEventListener('click',e=>{if(e.target.id==='playsheet')closePlaySheet()});
 let toastT;
 function toast(msg){
   const t=document.getElementById('toast');
   t.textContent=msg;t.classList.add('show');
   clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove('show'),2000);
 }
-render();
+render(); // 캐시 기반 첫 화면(Firebase가 준비되면 실시간 데이터로 자동 교체)
 </script>
 </body>
 </html>
