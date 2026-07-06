@@ -343,29 +343,6 @@ document.getElementById('adminOverlay').addEventListener('click', e=>{ if(e.targ
 </script>
 
 <script>
-/* ===== 초기 링크 (깃허브 배포용 프리로드) ===== */
-const SEED_LINKS = [
-  "https://www.facebook.com/share/r/1GFNNrwzN5/",
-  "https://www.facebook.com/share/r/19Tr4Hp6FE/",
-  "https://www.facebook.com/share/r/1AU4PwEcnE/",
-  "https://www.facebook.com/share/r/1D4bbb6WXM/",
-  "https://www.facebook.com/share/r/14oRs419m6c/",
-  "https://www.facebook.com/share/r/1Jajm38hJ4/",
-  "https://www.facebook.com/share/r/14wPuVhBAut/",
-  "https://www.facebook.com/share/r/1HBjRpQjCJ/",
-  "https://www.facebook.com/share/v/14gbqT9JtDo/",
-  "https://www.facebook.com/share/r/1DDBRpaM2F/",
-  "https://www.facebook.com/share/r/18sWNRPvvn/",
-  "https://www.facebook.com/share/r/1CJyk7Yyo4/",
-  "https://www.facebook.com/share/r/1CtSCPAmKa/",
-  "https://www.facebook.com/share/r/17FMdCwKpy/",
-  "https://www.facebook.com/share/r/196jZNiqUV/",
-  "https://www.facebook.com/share/r/1EGSk3HHpK/",
-  "https://www.facebook.com/share/r/1Gdpig4syE/",
-  "https://www.facebook.com/share/r/1CyzCSNx62/",
-  "https://www.facebook.com/share/r/1GJPSrtjdq/"
-];
-
 const CATS = [
   {id:'all',     name:'전체',         ic:'🏌️'},
   {id:'unsorted',name:'미분류',       ic:'📥'},
@@ -410,24 +387,13 @@ function startFirebase(){
         .sort((a,b)=>(a.order??0)-(b.order??0));
       cache(); render();
     }else{
-      // DB가 비어있으면 최초 1회 시드 심기
-      seedToCloud();
+      // DB가 비어있으면 빈 목록으로 표시(＋ 버튼으로 직접 추가)
+      lessons=[]; cache(); render();
     }
   }, err=>{
     console.warn('Firebase 읽기 오류, 캐시로 표시:', err);
     setSyncState('offline'); render();
   });
-}
-
-/* 최초 1회: 기존 19개 링크를 클라우드에 심기 */
-function seedToCloud(){
-  const {db,ref,set}=window.FB;
-  const obj={};
-  SEED_LINKS.forEach((url,i)=>{
-    const k=id();
-    obj[k]={ id:k, title:'레슨 '+(i+1)+' — 제목을 입력하세요', cat:'unsorted', url, thumb:'', order:i };
-  });
-  set(ref(db, DB_PATH), obj);
 }
 
 /* 한 개 레슨 저장(추가/수정) */
