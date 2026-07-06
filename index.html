@@ -512,27 +512,39 @@ function openLesson(lid){
   showPlaySheet(l);
 }
 
+let psPushed=false;   // 우리가 넣은 히스토리 지점이 살아있는지 추적
+
 function showPlaySheet(l){
   document.getElementById('psTitle').textContent = l.title;
   document.getElementById('psCat').textContent = catIc(l.cat)+' '+catName(l.cat);
   const btn=document.getElementById('psOpen');
-  btn.onclick=()=>{ window.open(l.url,'_blank','noopener'); };
+  btn.onclick=()=>{
+    // ★ 새 탭에서 안전하게 열기: 현재 앱 화면은 그대로 유지되고 영상만 새 탭에서 뜸
+    const a=document.createElement('a');
+    a.href=l.url; a.target='_blank'; a.rel='noopener noreferrer';
+    document.body.appendChild(a); a.click(); a.remove();
+  };
   const ps=document.getElementById('playsheet');
   ps.classList.add('on');
-  // 히스토리에 지점 하나 추가 → 페북 앱에서 뒤로가기로 브라우저 복귀 시 이 시트만 닫힘
-  history.pushState({playsheet:true}, '');
+  // 하드웨어 뒤로가기로 시트만 닫히도록 히스토리 지점 1개 추가 (중복 방지)
+  if(!psPushed){ history.pushState({playsheet:true}, ''); psPushed=true; }
 }
 function closePlaySheet(fromPop){
   const ps=document.getElementById('playsheet');
   if(!ps.classList.contains('on')) return;
   ps.classList.remove('on');
-  // 사용자가 X로 닫은 경우엔 우리가 심은 히스토리 지점을 정리
-  if(!fromPop && history.state && history.state.playsheet){ history.back(); }
+  if(fromPop){
+    // 뒤로가기로 닫힌 경우: 히스토리 지점은 이미 제거됨
+    psPushed=false;
+  }else if(psPushed){
+    // 닫기 버튼/배경 탭으로 닫은 경우: 우리가 넣은 지점만 정확히 제거 (페북으로 안 튐)
+    psPushed=false; history.back();
+  }
 }
 // 뒤로가기(back) 이벤트: 페북으로 나가지 않고 시트만 닫기
 window.addEventListener('popstate', ()=>{
   const ps=document.getElementById('playsheet');
-  if(ps.classList.contains('on')){ closePlaySheet(true); }
+  if(ps && ps.classList.contains('on')){ closePlaySheet(true); }
 });
 function openAdd(cat){
   document.getElementById('sheetTitle').textContent='레슨 추가';
